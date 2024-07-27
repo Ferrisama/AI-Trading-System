@@ -5,6 +5,7 @@ import matplotlib.dates as mdates
 import matplotlib.gridspec as GridSpec
 import seaborn as sns
 import logging
+from scipy.optimize import minimize
 from src.data_ingestion import DataIngestion
 from src.preprocessing import DataPreprocessor
 from src.anomaly_detection import AnomalyDetector
@@ -96,23 +97,65 @@ class PortfolioManager:
                 logging.error(f"Error optimizing strategy for {
                               symbol}: {str(e)}")
 
-    def allocate_portfolio(self):
-        # Simple equal-weight allocation for successfully processed symbols
-        valid_symbols = list(self.strategies.keys())
-        allocation = {symbol: 1/len(valid_symbols) for symbol in valid_symbols}
-        return allocation
+    def allocate_portfolio(self, method='equal_weight'):
+        if method == 'equal_weight':
+            return self._equal_weight_allocation()
+        elif method == 'risk_parity':
+            return self._risk_parity_allocation()
+        elif method == 'minimum_variance':
+            return self._minimum_variance_allocation()
+        else:
+            raise ValueError("Unknown allocation method")
 
-    def run_portfolio_backtest(self):
-        allocation = self.allocate_portfolio()
-        if not allocation:
-            raise ValueError("No valid symbols to allocate portfolio.")
+    def _equal_weight_allocation(self):
+        return {symbol: 1/len(self.symbols) for symbol in self.symbols}
 
-        first_symbol = list(self.data.keys())[0]
+    def _risk_parity_allocation(self):
+        returns = pd.DataFrame(
+            {symbol: self.backtesters[symbol].results['returns'] for symbol in self.symbols})
+        cov_matrix = returns.cov()
+
+        def risk_budget_objective(weights, args):
+            cov_matrix = args[0]
+            portfolio_risk = np.sqrt(
+                np.dot(np.dot(weights, cov_matrix), weights.T))
+            risk_contribution = np.dot(cov_matrix, weights.T) / portfolio_risk
+            risk_target = portfolio_risk / len(weights)
+            return np.sum((risk_contribution - risk_target)**2)
+
+        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+        bounds = tuple((0, 1) for _ in range(len(self.symbols)))
+        initial_weights = [1/len(self.symbols)] * len(self.symbols)
+
+        result = minimize(risk_budget_objective, initial_weights, args=[
+                          cov_matrix], method='SLSQP', constraints=constraints, bounds=bounds)
+
+        return {symbol: weight for symbol, weight in zip(self.symbols, result.x)}
+
+    def _minimum_variance_allocation(self):
+        returns = pd.DataFrame(
+            {symbol: self.backtesters[symbol].results['returns'] for symbol in self.symbols})
+        cov_matrix = returns.cov()
+
+        def portfolio_variance(weights, cov_matrix):
+            return np.dot(np.dot(weights, cov_matrix), weights.T)
+
+        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+        bounds = tuple((0, 1) for _ in range(len(self.symbols)))
+        initial_weights = [1/len(self.symbols)] * len(self.symbols)
+
+        result = minimize(portfolio_variance, initial_weights, args=(
+            cov_matrix,), method='SLSQP', constraints=constraints, bounds=bounds)
+
+        return {symbol: weight for symbol, weight in zip(self.symbols, result.x)}
+
+    def run_portfolio_backtest(self, allocation_method='equal_weight'):
+        allocation = self.allocate_portfolio(method=allocation_method)
         portfolio_value = pd.DataFrame(
-            index=self.data[first_symbol].index, columns=['Total'])
+            index=self.data[self.symbols[0]].index, columns=['Total'])
         portfolio_value['Total'] = self.initial_capital
 
-        for symbol in allocation.keys():
+        for symbol in self.symbols:
             strategy_returns = self.backtesters[symbol].results['returns']
             portfolio_value[symbol] = self.initial_capital * \
                 allocation[symbol] * (1 + strategy_returns).cumprod()
@@ -131,7 +174,8 @@ class PortfolioManager:
             'Portfolio Value': portfolio_value,
             'Sharpe Ratio': sharpe_ratio,
             'Total Return': total_return,
-            'Max Drawdown': max_drawdown
+            'Max Drawdown': max_drawdown,
+            'Allocation': allocation
         }
 
     def plot_comprehensive_results(self, save_path=None):
