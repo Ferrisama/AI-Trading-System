@@ -1,0 +1,68 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.9"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run tests
+        run: python -m unittest discover tests
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Build Docker image
+        run: docker build -t ai-trading-app .
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+      - name: Push image to Docker Hub
+        run: |
+          docker tag ai-trading-app ${{ secrets.DOCKER_HUB_USERNAME }}/ai-trading-app:${{ github.sha }}
+          docker push ${{ secrets.DOCKER_HUB_USERNAME }}/ai-trading-app:${{ github.sha }}
+
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to staging
+        env:
+          DOCKER_IMAGE: ${{ secrets.DOCKER_HUB_USERNAME }}/ai-trading-app:${{ github.sha }}
+        run: |
+          # Add your deployment script here
+          echo "Deploying $DOCKER_IMAGE to staging environment"
+          # This could involve SSH-ing into your staging server and updating the Docker image
+
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://your-production-url.com
+    steps:
+      - name: Deploy to production
+        env:
+          DOCKER_IMAGE: ${{ secrets.DOCKER_HUB_USERNAME }}/ai-trading-app:${{ github.sha }}
+        run: |
+          # Add your deployment script here
+          echo "Deploying $DOCKER_IMAGE to production environment"
+          # This could involve updating your Kubernetes cluster or SSH-ing into your production server

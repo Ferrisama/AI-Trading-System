@@ -1,0 +1,24 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:80"
+    depends_on:
+      - db
+    environment:
+      - DB_HOST=db
+      - DB_NAME=ai_trading
+      - DB_USER=your_username
+      - DB_PASSWORD=your_password
+
+  db:
+    image: postgres:13
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=ai_trading
+      - POSTGRES_USER=your_username
+      - POSTGRES_PASSWORD=your_password
+
+volumes:
+  postgres_data:
